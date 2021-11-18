@@ -64,6 +64,7 @@ class EventSource:
                  on_open=None,
                  on_message=None,
                  on_error=None,
+                 event_id_header_key=LAST_EVENT_ID_HEADER,
                  **kwargs):
         """Construct EventSource instance.
 
@@ -84,6 +85,8 @@ class EventSource:
         """
         self._url = URL(url)
         self._ready_state = READY_STATE_CONNECTING
+        if event_id_header_key != LAST_EVENT_ID_HEADER:
+            self._event_id_header_key = event_id_header_key
 
         if session is not None:
             self._session = session
@@ -174,9 +177,9 @@ class EventSource:
                     fields = line.split(':', 1)
                     field_name = fields[0]
                     field_value = fields[1].lstrip(' ')
-                    self._process_field(field_name, field_value)
+                    await self._process_field(field_name, field_value)
                 else:
-                    self._process_field(line, '')
+                    await self._process_field(line, '')
             self._ready_state = READY_STATE_CONNECTING
             if self._on_error:
                 self._on_error()
@@ -204,7 +207,7 @@ class EventSource:
         # whose value is the value of the event source's last event ID string,
         # encoded as UTF-8.
         if self._last_event_id != '':
-            headers[LAST_EVENT_ID_HEADER] = self._last_event_id
+            headers[self._event_id_header_key] = self._last_event_id
 
         # User agents should use the Cache-Control: no-cache header in
         # requests to bypass any caches for requests of event sources.
@@ -304,7 +307,7 @@ class EventSource:
             message=self._event_type,
             data=self._event_data,
             origin=self._origin,
-            last_event_id=self._last_event_id
+            last_event_id=self._last_event_id,
         )
         _LOGGER.debug(message)
         if self._on_message:
@@ -314,16 +317,18 @@ class EventSource:
         self._event_data = ''
         return message
 
-    def _process_field(self, field_name, field_value):
+    async def _process_field(self, field_name, field_value):
         """Process field."""
         if field_name == 'event':
             self._event_type = field_value
 
         elif field_name == 'data':
+            if field_value == '[DONE]':
+                await self.close()
             self._event_data += field_value
             self._event_data += '\n'
 
-        elif field_name == 'id' and field_value not in ('\u0000', '\x00\x00'):
+        elif field_name == self._event_id_header_key and field_value not in ('\u0000', '\x00\x00'):
             self._event_id = field_value
 
         elif field_name == 'retry':
